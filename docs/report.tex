@@ -1,0 +1,578 @@
+%% ============================================================================
+%%  Lab Report – Agentic AI: Travel Planning with LangChain & MCP
+%%  Compile:  pdflatex report.tex  (×2 for cross-refs)
+%% ============================================================================
+\documentclass[12pt,a4paper]{article}
+
+% ── Packages ──────────────────────────────────────────────────────────────── %
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{tcolorbox}
+\tcbuselibrary{listingsutf8,skins}
+
+% ── Colors ────────────────────────────────────────────────────────────────── %
+\definecolor{codeblue}{HTML}{667eea}
+\definecolor{codegray}{HTML}{6c7086}
+\definecolor{codebg}{HTML}{f5f5f5}
+\definecolor{linkcolor}{HTML}{764ba2}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=linkcolor,
+  urlcolor=codeblue,
+  citecolor=codegray,
+}
+
+% ── Code listing style ────────────────────────────────────────────────────── %
+\lstdefinestyle{python}{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  keywordstyle=\color{codeblue}\bfseries,
+  commentstyle=\color{codegray}\itshape,
+  stringstyle=\color{linkcolor},
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{codegray!30},
+  showstringspaces=false,
+  tabsize=4,
+  xleftmargin=1em,
+  framexleftmargin=0.5em,
+}
+\lstset{style=python}
+
+% ── Header / Footer ──────────────────────────────────────────────────────── %
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textit{Lab – Agentic AI}}
+\fancyhead[R]{\small\textit{LangChain \& MCP}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ── Tip box ───────────────────────────────────────────────────────────────── %
+\newtcolorbox{infobox}[1][]{
+  colback=codeblue!5, colframe=codeblue!60,
+  fonttitle=\bfseries, title={#1}, arc=3pt,
+}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{document}
+
+% ── Title page ────────────────────────────────────────────────────────────── %
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+{\Huge\bfseries Lab: Agentic AI\\[0.4em]}
+{\LARGE Travel Planning Assistant\\with LangChain, LangGraph \& MCP\par}
+\vspace{1.5cm}
+{\Large\itshape Yassine\par}
+\vspace{1cm}
+{\large University / Institution Name\par}
+\vspace{0.5cm}
+{\large Academic Year 2025--2026\par}
+\vfill
+{\large \today\par}
+\end{titlepage}
+
+\begin{center}
+\fcolorbox{codeblue}{codeblue!5}{%
+  \parbox{0.85\textwidth}{\centering\vspace{0.4em}
+    \textbf{GitHub Repository:}\\[0.3em]
+    \large\url{https://github.com/Moad26/lab-agentic}
+  \vspace{0.4em}}%
+}
+\end{center}
+\vspace{1em}
+
+\tableofcontents
+\newpage
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Introduction}
+% ══════════════════════════════════════════════════════════════════════════════
+
+Large Language Models (LLMs) excel at generating fluent text, but they cannot
+natively access external data or perform precise computations.
+\textbf{Agentic AI} bridges this gap by embedding an LLM inside a
+\emph{reason-then-act} loop: the model observes a user query, decides which
+external \textbf{tool} to invoke, interprets the result, and repeats until it
+can deliver a final answer.
+
+In this lab we build an \textbf{Agentic Travel Planning Assistant} that
+combines:
+\begin{itemize}[nosep]
+  \item \textbf{Ollama} – local inference of open-weight models (LLaMA~3.1);
+  \item \textbf{LangChain / LangGraph} – the orchestration framework that
+        implements a \emph{ReAct} agent graph;
+  \item \textbf{Model Context Protocol (MCP)} – a standardised protocol for
+        exposing tools as lightweight HTTP servers;
+  \item \textbf{Streamlit} – a web UI that surfaces tool calls, critic
+        reviews, and budget constraints.
+\end{itemize}
+
+Three exercises progressively enhance the baseline agent:
+\begin{enumerate}[nosep]
+  \item \textbf{Tool-call transparency} – every MCP call is logged and
+        rendered in the GUI.
+  \item \textbf{Critic agent} – a second LLM pass reviews the itinerary for
+        feasibility, budget, and balance.
+  \item \textbf{Budget constraint} – the user sets a maximum budget; the agent
+        must respect it, with one-click re-planning.
+\end{enumerate}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Background}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\subsection{ReAct Paradigm}
+
+The \emph{Reasoning + Acting} (ReAct) framework~\cite{yao2023react} interleaves
+chain-of-thought reasoning with tool actions.  At each step the agent produces:
+\begin{enumerate}[nosep]
+  \item \textbf{Thought} – internal reasoning about the current state;
+  \item \textbf{Action} – a tool call with structured arguments;
+  \item \textbf{Observation} – the tool's response, fed back as context.
+\end{enumerate}
+This loop continues until the agent decides to emit a \texttt{Final Answer}.
+
+\subsection{Model Context Protocol (MCP)}
+
+MCP is an open protocol, introduced by Anthropic in late 2024, that
+standardises how LLM applications discover and invoke tools.  Each
+\textbf{MCP server} exposes one or more tools via Server-Sent Events (SSE)
+or \texttt{stdio} transport.  The client (here, \texttt{langchain-mcp-adapters})
+connects to the servers, retrieves tool schemas, and converts them into
+LangChain \texttt{Tool} objects automatically.
+
+\subsection{LangGraph}
+
+LangGraph models agent execution as a directed graph of \emph{nodes}
+(LLM calls, tool dispatchers) and \emph{edges} (conditional routing).
+The built-in \texttt{create\_react\_agent()} helper constructs a complete
+ReAct graph with a tool node that dispatches calls to the appropriate
+LangChain tool.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Project Architecture}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\subsection{Repository Layout}
+
+After restructuring, the project follows a clean \texttt{src/} layout:
+
+\begin{verbatim}
+lab-agentic/
+├── src/
+│   ├── agent/
+│   │   ├── __init__.py
+│   │   ├── agent.py          # ReAct agent + critic
+│   │   └── app.py            # Streamlit web UI
+│   └── mcp_servers/
+│       ├── travel_search_server.py   # port 3001
+│       ├── finance_server.py         # port 3002
+│       ├── weather_server.py         # port 3003
+│       ├── currency_server.py        # port 3004
+│       └── calculator_server.py      # port 3005
+├── scripts/
+│   └── run_servers.py
+├── tests/
+├── docs/
+│   └── report.tex
+├── pyproject.toml
+└── README.md
+\end{verbatim}
+
+\subsection{Component Diagram}
+
+Figure~\ref{fig:arch} illustrates the runtime data flow.
+
+\begin{figure}[H]
+\centering
+\begin{tcolorbox}[colback=white,colframe=codegray!50,width=0.95\textwidth,arc=4pt]
+\begin{verbatim}
+  User Query  ──►  Streamlit UI (app.py)
+                        │
+                        ▼
+               LangGraph ReAct Agent (agent.py)
+                  LLM: Ollama / llama3.1
+                        │
+            ┌───────────┼───────────┐
+            ▼           ▼           ▼
+      MCP Server 1  MCP Server 2  ...  MCP Server 5
+      (Travel)      (Finance)          (Calculator)
+      :3001         :3002              :3005
+            │           │           │
+            └───────────┼───────────┘
+                        ▼
+               Agent Final Answer
+                        │
+                        ▼  (optional)
+               Critic Agent Review
+\end{verbatim}
+\end{tcolorbox}
+\caption{Runtime architecture of the Agentic Travel Planner.}
+\label{fig:arch}
+\end{figure}
+
+\subsection{Technology Stack}
+
+\begin{table}[H]
+\centering
+\caption{Key dependencies and their roles.}
+\label{tab:deps}
+\begin{tabular}{@{}llp{7cm}@{}}
+\toprule
+\textbf{Library} & \textbf{Version} & \textbf{Role} \\
+\midrule
+\texttt{langchain}             & $\geq$ 0.3  & LLM orchestration, prompt templates \\
+\texttt{langgraph}             & $\geq$ 0.4  & ReAct agent graph construction \\
+\texttt{langchain-ollama}      & $\geq$ 0.3  & \texttt{ChatOllama} LLM wrapper \\
+\texttt{langchain-mcp-adapters}& $\geq$ 0.1  & MCP $\leftrightarrow$ LangChain tool bridge \\
+\texttt{mcp[cli]}              & $\geq$ 1.0  & \texttt{FastMCP} server framework \\
+\texttt{streamlit}             & $\geq$ 1.40 & Web UI \\
+\texttt{ollama}                & --           & Local LLM inference (llama3.1) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{MCP Tool Servers}
+% ══════════════════════════════════════════════════════════════════════════════
+
+Each MCP server is a standalone Python script built with \texttt{FastMCP}.
+They expose tools via SSE on \texttt{localhost}.
+
+\subsection{Travel Search Server (port 3001)}
+
+Provides a simulated database of five destinations (Barcelona, Paris, Tokyo,
+New York, Marrakech) with attractions and activities.
+
+\begin{lstlisting}
+@mcp.tool()
+def search_destination(destination: str) -> str:
+    """Search for attractions and activities
+    for a given destination city."""
+    key = destination.strip().lower()
+    # partial match lookup ...
+    return formatted_result
+
+@mcp.tool()
+def list_available_destinations() -> str:
+    """List all destinations in the database."""
+\end{lstlisting}
+
+\subsection{Finance Server (port 3002)}
+
+Estimates travel budgets using per-destination daily cost profiles
+(accommodation, food, transport, activities, miscellaneous) and
+round-trip flight estimates, all in USD.
+
+\begin{lstlisting}
+@mcp.tool()
+def estimate_budget(destination: str, days: int) -> str:
+    """Estimate total travel budget in USD."""
+
+@mcp.tool()
+def get_daily_cost(destination: str) -> str:
+    """Get average daily cost breakdown."""
+\end{lstlisting}
+
+\subsection{Weather Server (port 3003)}
+
+Returns monthly temperature ranges, conditions, rainy-day counts, and
+indoor/outdoor recommendations.  A nearest-month fallback handles months
+missing from the database.
+
+\subsection{Currency Server (port 3004)}
+
+Converts amounts between 15 currencies using static exchange rates against
+USD.
+
+\subsection{Calculator Server (port 3005)}
+
+Evaluates safe arithmetic expressions, computes percentages, and splits
+costs among travellers.
+
+\begin{table}[H]
+\centering
+\caption{Summary of all MCP tools.}
+\label{tab:tools}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Server} & \textbf{Port} & \textbf{Tools} \\
+\midrule
+Travel Search & 3001 & \texttt{search\_destination}, \texttt{list\_available\_destinations} \\
+Finance       & 3002 & \texttt{estimate\_budget}, \texttt{get\_daily\_cost} \\
+Weather       & 3003 & \texttt{get\_weather}, \texttt{get\_best\_months} \\
+Currency      & 3004 & \texttt{convert\_currency}, \texttt{list\_currencies} \\
+Calculator    & 3005 & \texttt{calculate}, \texttt{percentage}, \texttt{split\_cost} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Agent Implementation}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\subsection{ReAct Agent (\texttt{agent.py})}
+
+The main agent is constructed with a single function call:
+
+\begin{lstlisting}
+async def run_travel_agent(user_request, model="llama3.1",
+                           budget_limit=None):
+    llm = ChatOllama(model=model, temperature=0.3)
+
+    async with MultiServerMCPClient(MCP_SERVERS) as client:
+        tools = client.get_tools()
+        agent = create_react_agent(llm, tools)
+        result = await agent.ainvoke({
+            "messages": [
+                ("system", SYSTEM_PROMPT),
+                ("user", prompt),
+            ]
+        })
+    # parse messages -> extract tool_calls, output
+    return {"output": ..., "tool_calls": [...], "messages": [...]}
+\end{lstlisting}
+
+\textbf{Key design choices:}
+\begin{itemize}[nosep]
+  \item \texttt{MultiServerMCPClient} connects to all five servers
+        simultaneously and merges their tool schemas.
+  \item The system prompt instructs the agent on the available tools and
+        a six-step reasoning process.
+  \item \texttt{temperature=0.3} balances creativity with consistency.
+  \item Post-processing parses the message list to extract a structured
+        log of tool calls (name, input, output).
+\end{itemize}
+
+\subsection{System Prompt Engineering}
+
+The system prompt is critical to agent behavior.  It specifies:
+
+\begin{enumerate}[nosep]
+  \item The available tools grouped by category;
+  \item A step-by-step workflow (understand $\to$ search $\to$ budget $\to$
+        weather $\to$ currency $\to$ calculate $\to$ synthesise);
+  \item The output format: a structured, day-by-day travel itinerary.
+\end{enumerate}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Exercises}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\subsection{Exercise 1 – Tool-Call Transparency}
+
+\textbf{Goal:} Display every MCP tool call in the Streamlit UI so the user
+can inspect the agent's reasoning process.
+
+\textbf{Implementation:} After the agent completes, the message history is
+iterated.  Each \texttt{AIMessage} with a \texttt{tool\_calls} attribute is
+logged, and the subsequent \texttt{ToolMessage} provides the output.  In the
+Streamlit app, these are rendered as expandable cards in the right column:
+
+\begin{lstlisting}
+for i, tc in enumerate(tool_calls, 1):
+    with st.expander(f"{i}. {tc['tool_name']}"):
+        st.code(tc["tool_input"], language="json")
+        if tc["tool_output"]:
+            st.text(tc["tool_output"][:500])
+\end{lstlisting}
+
+A statistics row shows the total tool calls, unique tools used, and message
+count.
+
+\subsection{Exercise 2 – Critic Agent}
+
+\textbf{Goal:} Automatically validate the generated travel plan with a second
+LLM pass.
+
+\textbf{Implementation:} A separate function \texttt{run\_critic\_agent()}
+sends the travel plan to the same Ollama model but with a different
+\emph{critic} system prompt:
+
+\begin{lstlisting}
+CRITIC_PROMPT = """
+You are a travel plan critic. Review the plan and provide:
+1. Feasibility score (1-10)
+2. Budget assessment
+3. Activity balance
+4. Potential issues
+5. Suggestions (2-3 concrete improvements)
+"""
+\end{lstlisting}
+
+The critic does \emph{not} use tools—it is a pure LLM evaluation.  This
+two-agent pattern (generator + critic) is a lightweight form of
+\emph{self-reflection} that improves output quality without fine-tuning.
+
+\subsection{Exercise 3 – Budget Constraint}
+
+\textbf{Goal:} Let the user set a maximum budget; the agent must respect it.
+
+\textbf{Implementation:}
+\begin{enumerate}[nosep]
+  \item The Streamlit sidebar exposes a toggle and a numeric input for the
+        budget limit (USD).
+  \item When enabled, an instruction is appended to the user prompt:
+        \emph{``You MUST keep the total trip cost under \$X.''}
+  \item If the plan appears to exceed the budget, the user can click
+        \textbf{Re-plan with Tighter Budget}, which re-invokes the agent
+        with 90\% of the original limit and an explicit instruction to
+        use cheaper alternatives.
+\end{enumerate}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Streamlit User Interface}
+% ══════════════════════════════════════════════════════════════════════════════
+
+The web UI (\texttt{src/agent/app.py}) is divided into:
+
+\begin{description}[nosep]
+  \item[Header] Gradient banner with project title.
+  \item[Sidebar] Model selector, budget toggle, critic toggle, MCP server
+        status reference.
+  \item[Main area] Text area with example prompts, a ``Plan My Trip''
+        button, stats row, two-column layout (plan + tool calls), critic
+        review section, and budget re-planning.
+\end{description}
+
+Custom CSS gives the interface a dark-themed, modern aesthetic with
+Catppuccin-inspired colours.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Running the Project}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\begin{enumerate}
+  \item \textbf{Install dependencies:}
+        \begin{verbatim}
+pip install -e .
+        \end{verbatim}
+  \item \textbf{Start Ollama:}
+        \begin{verbatim}
+ollama serve
+ollama pull llama3.1
+        \end{verbatim}
+  \item \textbf{Launch MCP servers:}
+        \begin{verbatim}
+python scripts/run_servers.py
+        \end{verbatim}
+  \item \textbf{Run the Streamlit app:}
+        \begin{verbatim}
+streamlit run src/agent/app.py
+        \end{verbatim}
+\end{enumerate}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Discussion}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\subsection{Strengths}
+
+\begin{itemize}[nosep]
+  \item \textbf{Modularity}: Each MCP server is independent, testable, and
+        replaceable (e.g., swap the weather stub for a real API).
+  \item \textbf{Transparency}: The tool-call log gives full observability
+        into the agent's reasoning.
+  \item \textbf{Local execution}: Ollama keeps all data on-device—no API
+        keys, no cloud dependency.
+  \item \textbf{Self-reflection}: The critic agent adds a lightweight
+        quality gate.
+\end{itemize}
+
+\subsection{Limitations}
+
+\begin{itemize}[nosep]
+  \item \textbf{Simulated data}: The MCP servers return hardcoded data for
+        five cities only.
+  \item \textbf{Budget enforcement}: The budget is enforced via prompt
+        engineering, not programmatically.  The agent may still hallucinate
+        numbers.
+  \item \textbf{No memory}: Each query is stateless; there is no
+        conversation history across requests.
+  \item \textbf{Model quality}: Smaller Ollama models may struggle with
+        complex multi-tool plans.
+\end{itemize}
+
+\subsection{Possible Extensions}
+
+\begin{itemize}[nosep]
+  \item Connect MCP servers to real APIs (e.g., OpenWeatherMap, Skyscanner).
+  \item Add a \textbf{planner agent} that decomposes complex queries into
+        sub-tasks before the executor agent runs.
+  \item Implement \textbf{conversation memory} with LangGraph checkpointing.
+  \item Add \textbf{unit tests} for each MCP server and integration tests
+        for the full agent loop.
+  \item Containerise with Docker Compose for one-command deployment.
+\end{itemize}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+% ══════════════════════════════════════════════════════════════════════════════
+
+This lab demonstrated how to build a fully functional \textbf{agentic AI
+system} by combining an LLM (Ollama / LLaMA~3.1), a graph-based agent
+framework (LangGraph), and standardised tool servers (MCP).  The three
+exercises highlighted key agentic patterns:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Tool-augmented generation} – extending the LLM's
+        capabilities with external tools.
+  \item \textbf{Self-reflection} – using a critic agent to evaluate and
+        improve outputs.
+  \item \textbf{Constrained planning} – enforcing user-defined limits
+        through prompt engineering and iterative re-planning.
+\end{enumerate}
+
+The modular architecture (separate MCP servers, clean \texttt{src/} layout,
+Streamlit UI) makes the system easy to extend, test, and deploy.
+
+% ══════════════════════════════════════════════════════════════════════════════
+% References
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{thebibliography}{9}
+
+\bibitem{yao2023react}
+  S.~Yao, J.~Zhao, D.~Yu, N.~Du, I.~Shafran, K.~Narasimhan, and Y.~Cao,
+  ``ReAct: Synergizing Reasoning and Acting in Language Models,''
+  in \emph{ICLR}, 2023.
+
+\bibitem{langchain}
+  LangChain, ``LangChain Documentation,''
+  \url{https://docs.langchain.com/}, 2024.
+
+\bibitem{langgraph}
+  LangChain, ``LangGraph: Build Stateful Agents,''
+  \url{https://langchain-ai.github.io/langgraph/}, 2024.
+
+\bibitem{mcp}
+  Anthropic, ``Model Context Protocol,''
+  \url{https://modelcontextprotocol.io/}, 2024.
+
+\bibitem{ollama}
+  Ollama, ``Ollama – Run LLMs Locally,''
+  \url{https://ollama.ai/}, 2024.
+
+\bibitem{streamlit}
+  Streamlit Inc., ``Streamlit Documentation,''
+  \url{https://docs.streamlit.io/}, 2024.
+
+\end{thebibliography}
+
+\end{document}
